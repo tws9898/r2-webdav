@@ -9,6 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 [[r2_buckets]]
 binding = "bucket" # <~ valid JavaScript variable name
 bucket_name = "webdav"
+preview_bucket_name = "webdav"
 
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/#enable-workers-logs
 [observability]
