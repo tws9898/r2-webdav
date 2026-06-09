@@ -30,38 +30,8 @@ async function* listAll(bucket: R2Bucket, prefix: string, isRecursive: boolean =
 			include: ['httpMetadata', 'customMetadata'],
 		});
 
-		// Handle regular objects
 		for (let object of r2_objects.objects) {
 			yield object;
-		}
-
-		// Handle delimited prefixes (virtual folders) when not recursive
-		if (!isRecursive && r2_objects.delimitedPrefixes) {
-			for (let folderPrefix of r2_objects.delimitedPrefixes) {
-				// Create a virtual R2Object to represent the folder
-				const virtualFolder: R2Object = {
-					key: folderPrefix.slice(0, -1), // Remove trailing slash
-					version: 'virtual-folder',
-					size: 0,
-					etag: '',
-					httpMetadata: {},
-					customMetadata: {
-						resourcetype: '<collection />'
-					},
-					storageClass: 'STANDARD' as any,
-					uploaded: new Date(),
-					checksums: {
-						toJSON: function (): R2StringChecksums {
-							throw new Error('Function not implemented.');
-						}
-					},
-					httpEtag: '',
-					writeHttpMetadata: function (headers: Headers): void {
-						throw new Error('Function not implemented.');
-					}
-				};
-				yield virtualFolder as any;
-			}
 		}
 
 		if (r2_objects.truncated) {
@@ -185,31 +155,13 @@ function getParentPath(resourcePath: string): string {
 	return normalizedPath.split('/').slice(0, -1).join('/');
 }
 
-async function isVirtualFolderPrefix(bucket: R2Bucket, prefix: string): Promise<boolean> {
-	// Check if there are any objects with this prefix
-	const result = await bucket.list({
-		prefix: prefix + '/',
-		limit: 1,
-	});
-	return result.objects.length > 0 || (result.delimitedPrefixes && result.delimitedPrefixes.length > 0);
-}
-
 async function hasCollectionResource(bucket: R2Bucket, resourcePath: string): Promise<boolean> {
 	if (resourcePath === '') {
 		return true;
 	}
 
 	let resource = await bucket.head(resourcePath);
-	if (resource?.customMetadata?.resourcetype === '<collection />') {
-		return true;
-	}
-	
-	// Check if it's a virtual folder prefix
-	if (resource === null) {
-		return await isVirtualFolderPrefix(bucket, resourcePath);
-	}
-	
-	return false;
+	return resource?.customMetadata?.resourcetype === '<collection />';
 }
 
 function parseDestinationPath(destinationHeader: string, requestUrl: string): string | null {
@@ -765,14 +717,7 @@ async function handle_get(request: Request, bucket: R2Bucket): Promise<Response>
 	if (request.url.endsWith('/')) {
 		if (resource_path !== '') {
 			let resource = await bucket.head(resource_path);
-			let isCollection = resource?.customMetadata?.resourcetype === '<collection />';
-			
-			// If head returns null, check if it's a virtual folder prefix
-			if (resource === null && !isCollection) {
-				isCollection = await isVirtualFolderPrefix(bucket, resource_path);
-			}
-			
-			if (!isCollection) {
+			if (resource === null || resource.customMetadata?.resourcetype !== '<collection />') {
 				return new Response('Not Found', { status: 404 });
 			}
 		}
@@ -1055,18 +1000,10 @@ async function handle_propfind(request: Request, bucket: R2Bucket): Promise<Resp
 	} else {
 		let object = await bucket.head(resource_path);
 		if (object === null) {
-			// Check if this is a virtual folder prefix
-			if (await isVirtualFolderPrefix(bucket, resource_path)) {
-				// Treat as a virtual folder collection
-				page += generate_propfind_response(null, propfindRequest);
-				is_collection = true;
-			} else {
-				return new Response('Not Found', { status: 404 });
-			}
-		} else {
-			is_collection = object.customMetadata?.resourcetype === '<collection />';
-			page += generate_propfind_response(object, propfindRequest);
+			return new Response('Not Found', { status: 404 });
 		}
+		is_collection = object.customMetadata?.resourcetype === '<collection />';
+		page += generate_propfind_response(object, propfindRequest);
 	}
 
 	if (is_collection) {
